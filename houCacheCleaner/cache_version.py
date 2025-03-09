@@ -7,7 +7,7 @@ import hou
 from houCacheCleaner.common import VERSION_PATTERN, get_dir_size
 
 class CacheVersion:
-    """Objet definissant une version d'un cache"""
+    """Object defining a version of a cache"""
 
     def __init__(self, path: str = None):
         self.path = path
