@@ -1,0 +1,10 @@
+{
+  "recommends": "houdini_version >= '20.5'",
+  "enable": true,
+  "env": [
+    {
+      "HOU_CACHE_CLEANER": "E:/dev/houCacheCleaner"
+    }
+  ],
+  "hpath": "$HOU_CACHE_CLEANER"
+}
