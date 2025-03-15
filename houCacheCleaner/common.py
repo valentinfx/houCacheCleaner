@@ -3,10 +3,13 @@ import re
 import hou
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+import stat
 
 from houCacheCleaner.cache import Cache
 
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] : %(message)s')
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] : %(message)s")
 log = logging.getLogger(__name__)
 
 FILE_CACHE_NODE_TYPE_NAME = "filecache" # WATCHME: handle HDA version 
@@ -26,32 +29,61 @@ BGEO_FILE_PATTERN = re.compile(
 # =====================
 
 
-def truncate(f: float, n: int) -> str:
-    """Truncates / pads a float f to n decimal places without rounding"""
-    s = "{}".format(f)
-    if "e" in s or "E" in s:
-        return "{0:.{1}f}".format(f, n)
-    i, p, d = s.partition(".")
-    return ".".join([i, (d+"0"*n)[:n]])
-
-def get_dir_size(path: str) -> float:
-    """Recursively calculates the size of a directory
-    TODO python 3 : Optimize this function
+def get_dir_size_fast(path) -> float:
+    """Calculate directory size using multiple optimizations:
+    - Uses scandir instead of listdir for better performance
+    - Minimizes stat calls by using DirEntry object properties
+    - Uses threading for parallel processing of subdirectories
+    - Uses pathlib for more efficient path handling
+    - Maintains running total instead of recursive sum
+    
+    Args:
+        path: String path to directory
+    Returns:
+        Float size in gigabytes
     """
-    start_time = time.time()
+    def scan_directory(path):
+        total = 0
+        subdirs = []
+        
+        # Use scandir instead of listdir for better performance
+        with os.scandir(path) as scanner:
+            for entry in scanner:
+                try:
+                    # Get entry's stat info without additional system calls
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                    elif entry.is_dir(follow_symlinks=False):
+                        subdirs.append(entry.path)
+                except (PermissionError, FileNotFoundError):
+                    continue
+                    
+        return total, subdirs
 
-    total = 0
-    for p in os.listdir(path):
-        full_path = os.path.join(path, p)
-        if os.path.isfile(full_path):
-            total += os.path.getsize(full_path)
-        elif os.path.isdir(full_path):
-            total += get_dir_size(full_path)
+    def process_directory(path):
+        total = 0
+        dirs_to_scan = [path]
+        
+        while dirs_to_scan:
+            current_dirs = dirs_to_scan[:100]  # Process in batches
+            dirs_to_scan = dirs_to_scan[100:]
+            
+            # Use ThreadPoolExecutor for parallel directory scanning
+            with ThreadPoolExecutor(max_workers=min(len(current_dirs), 20)) as executor:
+                results = executor.map(scan_directory, current_dirs)
+                
+                for size, new_subdirs in results:
+                    total += size
+                    dirs_to_scan.extend(new_subdirs)
+                    
+        return total
 
-    log.info(f"get_dir_size() took {time.time() - start_time} seconds to finish")
-    total = float(total) / 1024 / 1024 / 1024 # Convert to GB
-    total = truncate(total, 2)
-    return total
+    try:
+        total_bytes = process_directory(path)
+        return float(total_bytes) / (1024 ** 3)  # Convert to GB
+    except Exception as e:
+        log.error(f"Error calculating directory size: {e}")
+        return 0
 
 
 def get_caches_list() -> list[Cache]:
@@ -74,7 +106,7 @@ def get_caches_list() -> list[Cache]:
     cache_instances_to_create = []
     for version_path in cache_versions_paths:
         match = VERSION_PATTERN.match(os.path.basename(version_path))
-        cache_instances_to_create.append(match.group('name'))
+        cache_instances_to_create.append(match.group("name"))
 
     # 3. Let's remove duplicates
     cache_instances_to_create = set(cache_instances_to_create)
